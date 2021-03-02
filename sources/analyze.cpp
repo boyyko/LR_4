@@ -1,176 +1,142 @@
-// Copyright 2020 Your Name <your_email>
+#include "analyze.hpp"
+#include <iostream>
+#include <algorithm>
 
-#include <analyze.hpp>
+using namespace  boost::filesystem;
 
-const std::string extension_txt = ".txt";
-const std::string balance = "balance";
-const std::string digits = "0123456789";
-const std::string directory_docs = "docs";
-const char under_line = '_';
-const int number_length = 8;
-const int date_length = 8;
-const char dot = '.';
-
-std::ostream& operator<<(std::ostream& out, const analyze& a)
+file_system::file_system(const std::string path_to_file)
 {
-  for (const auto & current_account : a.accounts)
+    _path_to_ftp = path(path_to_file);
+    std::cout<<_path_to_ftp<<std::endl;
+    if(is_symlink(_path_to_ftp))
+        _path_to_ftp=read_symlink(_path_to_ftp);
+    if(!is_directory(_path_to_ftp))
+        throw std::runtime_error("This is not directory");
+}
+
+void file_system::check_all_path(path p, std::ostream &os)
+{
+    for (const directory_entry& x : directory_iterator{p})
   {
-    for (size_t i = 0; i < current_account->file_name.size(); ++i)
-    {
-      out << current_account->broker_name << " "
-          << current_account->file_name[i] << std::endl;
+        if (is_directory(x.path()))
+            check_all_path(x.path(), os);
+        else if (is_regular_file(x.path()))
+            to_process(x.path(), os);
     }
-  }
-  for (const auto & current_account : a.accounts)
-  {
-    out << *current_account << std::endl;
-  }
-  return out;
 }
 
-std::ostream& operator<<(std::ostream& os, const account& acc)
+bool file_system::to_process(path p, std::ostream &os)
 {
-  os  << " broker:"   << acc.broker_name
-      << " account:"  << acc.number_account
-      << " files:"    << acc.file_name.size()
-      << " lastdate:" << acc.date;
-  return os;
+    if(check_file_name(p))
+  {
+        std::string file_name = p.filename().string();
+        std::string account = check_account(file_name);
+        std::string data = check_data(file_name);
+        std::string broker = check_broker(p);
+
+        if (account.size() == 0 || data.size() == 0 || broker.size() == 0)
+            return false;
+
+        os<<broker<<" "<<file_name<<std::endl;
+        insert_element(account, data, broker);
+        return true;
+    }
+    else
+        return false;
 }
 
-void analyze::parse_dir_info(const filesystem::path& path_dir, const std::string &broker)
+bool file_system::check_file_name(path p)
 {
-  filesystem::path current_path;
-  if (filesystem::is_symlink(path_dir))
-  {
-    current_path = filesystem::read_symlink(path_dir);
-  }
-  else
-  {
-    current_path = path_dir;
-  }
-  for (const auto &i : filesystem::directory_iterator(current_path))
-  {
-    if (filesystem::is_directory(i))
+  const std::string _txt = ".txt";
+  const std::string _balance = "balance";
+
+    if(p.extension()==_txt && p.filename().size() == len_name_file &&
+       p.filename().string().substr(0, 7)==_balance)
+        return true;
+    else
+        return false;
+}
+
+std::string file_system::check_account(std::string p)
+{
+    std::size_t iterator1 = p.find_first_of('_', 0);
+    if(iterator1 == std::string::npos)  return std::string();
+    ++iterator1;
+    std::size_t iterator2 = p.find_last_of('_');
+    if(iterator2 == std::string::npos) return std::string();
+    std::string account = p.substr(iterator1, iterator2-iterator1);
+
+    if(account.find_first_not_of(_numbers,0) != std::string::npos)
+        return std::string();
+
+    return account;
+}
+
+std::string file_system::check_data(std::string p)
+{
+    std::size_t iterator1 = p.find_last_of('_');
+    if(iterator1 == std::string::npos) return std::string();
+    ++iterator1;
+    std::size_t iterator2 = p.find_last_of('.');
+    if(iterator2 == std::string::npos) return std::string();
+    std::string data = p.substr(iterator1, iterator2-iterator1);
+
+    if(data.find_first_not_of(_numbers,0) != std::string::npos)
+        return std::string();
+    return data;
+}
+
+std::string file_system::check_broker(path p)
+{
+    p = absolute(p);
+    std::size_t iterator2 = p.string().find_last_of('/');
+    if(iterator2 == std::string::npos) return std::string();
+    --iterator2;
+    std::size_t iterator1 = p.string().find_last_of('/', iterator2);
+    if(iterator1 == std::string::npos) return std::string();
+    ++iterator1;
+    ++iterator2;
+    std::string broker = p.string().substr(iterator1, iterator2-iterator1);
+
+    return broker;
+}
+
+void file_system::insert_element(std::string account, std::string data,std::string broker)
+{
+    std::vector<std::string>::iterator it = std::find(_account.begin(),_account.end(),account);
+    std::vector<std::string>::difference_type index = std::distance
+        (_account.begin(), it);
+    if(_account.size() == (size_t) index)
     {
-      parse_dir_info(i.path(),broker);
+        _account.push_back(account);
+        _broker.push_back(broker);
+        _files.push_back(1);
+        _last_date.push_back(std::stoi(data));
+    }
+    else if (_broker[index] == broker)
+    {
+        ++_files[index];
+        _last_date[index] = (_last_date[index] > std::stoi(data))?
+                           _last_date[index]:std::stoi(data);
     }
     else
     {
-      if (!check_filename(i.path())) continue;
-      std::string ac_number = get_number_account(i.path().filename().string());
-      account* acc = nullptr;
-      for (const auto& current_account : accounts)
-      {
-        if ((current_account->broker_name == broker) &&
-            (current_account->number_account == ac_number))
-        {
-          acc = current_account;
-          break;
-        }
-      }
-      if (!acc)
-      {
-        acc = new account;
-        acc->file_name.push_back(i.path().filename().string());
-        acc->broker_name = broker;
-        acc->number_account = ac_number;
-        accounts.push_back(acc);
-      }
-      else
-      {
-        acc->file_name.push_back(i.path().filename().string());
-      }
+        throw std::runtime_error("Two owners per account");
     }
-  }
-}
-std::string analyze::get_number_account(const std::string &filename)
-{
-  std::string tmp = filename.substr(filename.find(under_line) + 1, number_length);
-  return tmp;
 }
 
-bool analyze::check_filename(const filesystem::path& path_file)
+void file_system::show_acc(std::ostream &os)
 {
-  if (path_file.extension() != extension_txt) return false;
-  else if (path_file.stem().has_extension())
-    return false;
-  std::string filename = path_file.stem().filename().string();
-  size_t underline_pos = filename.find(under_line);
-  std::string tmp;
-  if (underline_pos)
+    for (size_t i = 0; i < _account.size(); ++i)
   {
-    tmp = filename.substr(0, underline_pos);
-  }
-  else
-  {
-    return false;
-  }
-
-  if (tmp != balance)
-    return false;
-  filename = filename.substr(underline_pos + 1);
-  underline_pos = filename.find(under_line);
-  if (!underline_pos)
-    return false;
-  else
-  {
-    tmp = filename.substr(0, underline_pos);
-    if (tmp.size() != number_length)
-      return false;
-    if (tmp.find_first_not_of(digits) != std::string::npos)
-      return false;
-    tmp = filename.substr(underline_pos + 1);
-    if (tmp.size() != date_length)
-      return false;
-    if (tmp.find_first_not_of(digits) != std::string::npos)
-      return false;
-  }
-  return true;
-}
-
-void analyze::set_lastdates()
-{
-  for (auto & current_account : accounts)
-  {
-    current_account->date = get_date(current_account->file_name[0]);
-    for (auto & current_filename : current_account->file_name)
-    {
-      std::string tmp = get_date(current_filename);
-      if (tmp > current_account->date)
-        current_account->date = tmp;
+        os << "broker:" << _broker[i] << " account:" << _account[i] <<
+          " files:" << _files[i] << " lastdate:" << _last_date[i] << std::endl;
     }
-  }
 }
 
-std::string analyze::get_date(const std::string& filename) const
+std::ostream& operator<<(std::ostream &os,  file_system& file_system)
 {
-  std::string date = filename.substr(filename.find(under_line) + 1,
-                                     filename.find(dot) -
-                                     filename.find(under_line) - 1);
-  date = date.substr(date.find(under_line) + 1);
-  return date;
-}
-analyze::~analyze()
-{
-  for (const auto & current_account : accounts)
-  {
-    delete current_account;
-  }
-}
-analyze::analyze(const filesystem::path& _path_ftp)
-    : path_ftp(_path_ftp)
-{
-  if (!filesystem::exists(path_ftp))
-    throw (std::string("Path is wrong\n"));
-  if (!filesystem::is_directory(path_ftp))
-    throw (std::string("Dir is wrong\n"));
-  for (const auto &i : filesystem::directory_iterator(path_ftp)){
-    if (!filesystem::is_directory(i))
-      continue;
-    if (i.path().filename().string() == directory_docs)
-      continue;
-    std::string broker = i.path().filename().string();
-    parse_dir_info(i.path(),broker);
-  }
-  set_lastdates();
+    file_system.check_all_path(file_system._path_to_ftp, os);
+    file_system.show_acc(os);
+    return os;
 }
